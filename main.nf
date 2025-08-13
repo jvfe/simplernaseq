@@ -270,8 +270,8 @@ process MULTIQC {
 process CUSTOM_DUMPSOFTWAREVERSIONS {
     label 'process_single'
 
-    conda "conda-forge::sed=4.7"
-    container "quay.io/biocontainers/ubuntu:20.04"
+    conda "bioconda::multiqc=1.14"
+    container "quay.io/biocontainers/multiqc:1.14--pyhdfd78af_0"
 
     input:
     path versions
