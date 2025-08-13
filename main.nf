@@ -3,6 +3,49 @@
 nextflow.enable.dsl = 2
 
 //modules
+process GUNZIP {
+    tag "$archive"
+    label 'process_single'
+
+    conda "conda-forge::sed=4.7"
+    container "nf-core/ubuntu:20.04"
+
+    input:
+    tuple val(meta), path(archive)
+
+    output:
+    tuple val(meta), path("$gunzip"), emit: gunzip
+    path "versions.yml"             , emit: versions
+
+    script:
+    def args = task.ext.args ?: ''
+    gunzip = archive.toString() - '.gz'
+    """
+    # Not calling gunzip itself because it can be very slow
+    # for large files. Using bash and zcat instead.
+    if [ "\$(file --brief --mime-type $archive)" == "application/gzip" ]; then
+        zcat $args $archive > $gunzip
+    else
+        # If not gzipped, just create a symlink
+        ln -s $archive $gunzip
+    fi
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        gunzip: \$(echo \$(gunzip --version 2>&1) | sed 's/^.*(gzip) //; s/ Copyright.*\$//')
+    END_VERSIONS
+    """
+
+    stub:
+    gunzip = archive.toString() - '.gz'
+    """
+    touch $gunzip
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        gunzip: \$(echo \$(gunzip --version 2>&1) | sed 's/^.*(gzip) //; s/ Copyright.*\$//')
+    END_VERSIONS
+    """
+}
 
 process FASTQC {
     tag "$meta.id"
@@ -445,12 +488,44 @@ workflow {
     // Run FastQC
     FASTQC(ch_input)
 
+    // Handle GTF file - decompress if needed
+    ch_gtf = Channel.fromPath(params.gtf)
+        .map { gtf_file ->
+            def meta = [id: 'gtf']
+            [meta, gtf_file]
+        }
+    
+    if (params.gtf.endsWith('.gz')) {
+        GUNZIP(ch_gtf)
+        ch_gtf_final = GUNZIP.out.gunzip.map { meta, file -> file }
+        ch_gunzip_gtf_versions = GUNZIP.out.versions
+    } else {
+        ch_gtf_final = ch_gtf.map { meta, file -> file }
+        ch_gunzip_gtf_versions = Channel.empty()
+    }
+
     // Handle HISAT2 index - either build it or use existing
     if (params.fasta) {
+        // Handle FASTA file - decompress if needed
+        ch_fasta = Channel.fromPath(params.fasta)
+            .map { fasta_file ->
+                def meta = [id: 'fasta']
+                [meta, fasta_file]
+            }
+        
+        if (params.fasta.endsWith('.gz')) {
+            GUNZIP(ch_fasta)
+            ch_fasta_final = GUNZIP.out.gunzip.map { meta, file -> file }
+            ch_gunzip_fasta_versions = GUNZIP.out.versions
+        } else {
+            ch_fasta_final = ch_fasta.map { meta, file -> file }
+            ch_gunzip_fasta_versions = Channel.empty()
+        }
+
         // Build HISAT2 index from FASTA
         HISAT2_BUILD(
-            file(params.fasta),
-            file(params.gtf),
+            ch_fasta_final,
+            ch_gtf_final,
             []
         )
         ch_hisat2_index = HISAT2_BUILD.out.index
@@ -459,19 +534,20 @@ workflow {
         // Use pre-built index
         ch_hisat2_index = Channel.value(file(params.hisat2_index))
         ch_hisat2_build_versions = Channel.empty()
+        ch_gunzip_fasta_versions = Channel.empty()
     }
 
     // Run HISAT2 alignment
     HISAT2_ALIGN(
         ch_input,
         ch_hisat2_index,
-        file(params.gtf)
+        ch_gtf_final
     )
 
     // Run featureCounts
     FEATURECOUNTS(
         HISAT2_ALIGN.out.bam,
-        file(params.gtf)
+        ch_gtf_final
     )
 
     // Collect versions from all processes
