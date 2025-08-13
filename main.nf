@@ -47,6 +47,51 @@ process GUNZIP {
     """
 }
 
+process GUNZIP_GTF {
+    tag "$archive"
+    label 'process_single'
+
+    conda "conda-forge::sed=4.7"
+    container "nf-core/ubuntu:20.04"
+
+    input:
+    tuple val(meta), path(archive)
+
+    output:
+    tuple val(meta), path("$gunzip"), emit: gunzip
+    path "versions.yml"             , emit: versions
+
+    script:
+    def args = task.ext.args ?: ''
+    gunzip = archive.toString() - '.gz'
+    """
+    # Not calling gunzip itself because it can be very slow
+    # for large files. Using bash and zcat instead.
+    if [ "\$(file --brief --mime-type $archive)" == "application/gzip" ]; then
+        zcat $args $archive > $gunzip
+    else
+        # If not gzipped, just create a symlink
+        ln -s $archive $gunzip
+    fi
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        gunzip: \$(echo \$(gunzip --version 2>&1) | sed 's/^.*(gzip) //; s/ Copyright.*\$//')
+    END_VERSIONS
+    """
+
+    stub:
+    gunzip = archive.toString() - '.gz'
+    """
+    touch $gunzip
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        gunzip: \$(echo \$(gunzip --version 2>&1) | sed 's/^.*(gzip) //; s/ Copyright.*\$//')
+    END_VERSIONS
+    """
+}
+
+
 process FASTQC {
     tag "$meta.id"
     label 'process_low'
@@ -496,9 +541,9 @@ workflow {
         }
     
     if (params.gtf.endsWith('.gz')) {
-        GUNZIP(ch_gtf)
-        ch_gtf_final = GUNZIP.out.gunzip.map { meta, file -> file }
-        ch_gunzip_gtf_versions = GUNZIP.out.versions
+        GUNZIP_GTF(ch_gtf)
+        ch_gtf_final = GUNZIP_GTF.out.gunzip.map { meta, file -> file }
+        ch_gunzip_gtf_versions = GUNZIP_GTF.out.versions
     } else {
         ch_gtf_final = ch_gtf.map { meta, file -> file }
         ch_gunzip_gtf_versions = Channel.empty()
