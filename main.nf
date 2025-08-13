@@ -8,7 +8,7 @@ process GUNZIP {
     label 'process_single'
 
     conda "conda-forge::sed=4.7"
-    container "nf-core/ubuntu:20.04"
+    container "quay.io/nf-core/ubuntu:20.04"
 
     input:
     tuple val(meta), path(archive)
@@ -52,7 +52,7 @@ process GUNZIP_GTF {
     label 'process_single'
 
     conda "conda-forge::sed=4.7"
-    container "nf-core/ubuntu:20.04"
+    container "quay.io/nf-core/ubuntu:20.04"
 
     input:
     tuple val(meta), path(archive)
