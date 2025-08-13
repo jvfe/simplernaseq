@@ -43,14 +43,14 @@ process FASTQC {
     """
 }
 
-process STAR_ALIGN {
+process HISAT2_ALIGN {
     tag "$meta.id"
     label 'process_high'
     
-    conda "bioconda::star=2.7.11a bioconda::samtools=1.19.2"
-    container "quay.io/biocontainers/mulled-v2-1fa26d1ce03c295fe2fdcf85831a92fbcbd7e8c2:1df389393721fc66f3fd8778ad938ac711951107-0"
+    conda "bioconda::hisat2=2.2.1 bioconda::samtools=1.19.2"
+    container "quay.io/biocontainers/mulled-v2-a97e90b3b802d1da3d6958e0867610c718cb5eb1:2880dd9d8ad0a7b221d4ebc6e532a6ac915b6e90-0"
     
-    publishDir "${params.outdir}/star", mode: 'copy'
+    publishDir "${params.outdir}/hisat2", mode: 'copy'
 
     input:
     tuple val(meta), path(reads)
@@ -59,27 +59,35 @@ process STAR_ALIGN {
 
     output:
     tuple val(meta), path('*.bam')        , emit: bam
-    tuple val(meta), path('*.out')        , emit: log
-    tuple val(meta), path('*SJ.out.tab')  , emit: sj
+    tuple val(meta), path('*.log')        , emit: log
     path "versions.yml"                   , emit: versions
 
     script:
     def args = task.ext.args ?: ''
     def prefix = task.ext.prefix ?: "${meta.id}"
+    def strandedness = ''
+    if (meta.strandedness == 'forward') {
+        strandedness = meta.single_end ? '--rna-strandness F' : '--rna-strandness FR'
+    } else if (meta.strandedness == 'reverse') {
+        strandedness = meta.single_end ? '--rna-strandness R' : '--rna-strandness RF'
+    }
+    def seq_center = meta.seq_center ? "--rg-id ${prefix} --rg SM:${prefix} --rg CN:${meta.seq_center}" : "--rg-id ${prefix} --rg SM:${prefix}"
     """
-    STAR \\
-        --genomeDir $index \\
-        --readFilesIn $reads \\
-        --runThreadN $task.cpus \\
-        --outFileNamePrefix ${prefix}. \\
-        --outSAMtype BAM SortedByCoordinate \\
-        --sjdbGTFfile $gtf \\
-        --readFilesCommand zcat \\
-        $args
+    INDEX=`find -L ./ -name "*.1.ht2" | sed 's/\\.1\\.ht2\$//'`
+    
+    hisat2 \\
+        -x \$INDEX \\
+        $strandedness \\
+        $seq_center \\
+        --threads $task.cpus \\
+        $args \\
+        -U $reads \\
+        --summary-file ${prefix}.hisat2.summary.log \\
+        | samtools sort --threads $task.cpus -o ${prefix}.bam -
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        star: \$(STAR --version | sed -e "s/STAR_//g")
+        hisat2: \$(echo \$(hisat2 --version 2>&1) | sed 's/^.*hisat2-align-s version //; s/ .*\$//')
         samtools: \$(echo \$(samtools --version 2>&1) | sed 's/^.*samtools //; s/Using.*\$//')
     END_VERSIONS
     """
@@ -87,73 +95,74 @@ process STAR_ALIGN {
     stub:
     def prefix = task.ext.prefix ?: "${meta.id}"
     """
-    touch ${prefix}.Aligned.sortedByCoord.out.bam
-    touch ${prefix}.Log.out
-    touch ${prefix}.Log.final.out
-    touch ${prefix}.SJ.out.tab
+    touch ${prefix}.bam
+    touch ${prefix}.hisat2.summary.log
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        star: \$(STAR --version | sed -e "s/STAR_//g")
+        hisat2: \$(echo \$(hisat2 --version 2>&1) | sed 's/^.*hisat2-align-s version //; s/ .*\$//')
         samtools: \$(echo \$(samtools --version 2>&1) | sed 's/^.*samtools //; s/Using.*\$//')
     END_VERSIONS
     """
 }
 
-process STAR_GENOMEGENERATE {
-    tag "star_genomegenerate"
+process HISAT2_BUILD {
+    tag "hisat2_build"
     label 'process_high'
     
-    conda "bioconda::star=2.7.11a bioconda::samtools=1.19.2"
-    container "quay.io/biocontainers/mulled-v2-1fa26d1ce03c295fe2fdcf85831a92fbcbd7e8c2:1df389393721fc66f3fd8778ad938ac711951107-0"
+    conda "bioconda::hisat2=2.2.1 bioconda::samtools=1.19.2"
+    container "quay.io/biocontainers/mulled-v2-a97e90b3b802d1da3d6958e0867610c718cb5eb1:2880dd9d8ad0a7b221d4ebc6e532a6ac915b6e90-0"
     
-    publishDir "${params.outdir}/star_index", mode: 'copy'
+    publishDir "${params.outdir}/hisat2_index", mode: 'copy'
 
     input:
     path fasta
     path gtf
+    path splicesites
 
     output:
-    path "star_index"     , emit: index
-    path "versions.yml"   , emit: versions
+    path "hisat2_index"     , emit: index
+    path "versions.yml"     , emit: versions
 
     script:
     def args = task.ext.args ?: ''
-    def memory_gb = task.memory ? "--limitGenomeGenerateRAM ${task.memory.toBytes() - 100000000}" : ''
+    def avail_mem = 3
+    if (!task.memory) {
+        log.info '[HISAT2 index build] Available memory not known - defaulting to 3GB. Specify process memory requirements to change this.'
+    } else {
+        avail_mem = task.memory.giga
+    }
+    def ss = splicesites ? "--ss $splicesites" : ""
     """
-    mkdir star_index
-
-    STAR \\
-        --runMode genomeGenerate \\
-        --genomeDir star_index/ \\
-        --genomeFastaFiles $fasta \\
-        --sjdbGTFfile $gtf \\
-        --runThreadN $task.cpus \\
-        --sjdbOverhang 100 \\
-        $memory_gb \\
-        $args
+    mkdir hisat2_index
+    hisat2-build \\
+        -p $task.cpus \\
+        $ss \\
+        $args \\
+        $fasta \\
+        hisat2_index/${fasta.baseName}
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        star: \$(STAR --version | sed -e "s/STAR_//g")
+        hisat2: \$(echo \$(hisat2 --version 2>&1) | sed 's/^.*hisat2-align-s version //; s/ .*\$//')
     END_VERSIONS
     """
 
     stub:
     """
-    mkdir star_index
-    touch star_index/chrLength.txt
-    touch star_index/chrNameLength.txt
-    touch star_index/chrName.txt
-    touch star_index/chrStart.txt
-    touch star_index/Genome
-    touch star_index/genomeParameters.txt
-    touch star_index/SA
-    touch star_index/SAindex
+    mkdir hisat2_index
+    touch hisat2_index/${fasta.baseName}.1.ht2
+    touch hisat2_index/${fasta.baseName}.2.ht2
+    touch hisat2_index/${fasta.baseName}.3.ht2
+    touch hisat2_index/${fasta.baseName}.4.ht2
+    touch hisat2_index/${fasta.baseName}.5.ht2
+    touch hisat2_index/${fasta.baseName}.6.ht2
+    touch hisat2_index/${fasta.baseName}.7.ht2
+    touch hisat2_index/${fasta.baseName}.8.ht2
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
-        star: \$(STAR --version | sed -e "s/STAR_//g")
+        hisat2: \$(echo \$(hisat2 --version 2>&1) | sed 's/^.*hisat2-align-s version //; s/ .*\$//')
     END_VERSIONS
     """
 }
@@ -205,12 +214,69 @@ process FEATURECOUNTS {
     END_VERSIONS
     """
 }
+
+process MULTIQC {
+    label 'process_single'
+    
+    conda "bioconda::multiqc=1.21"
+    container "quay.io/biocontainers/multiqc:1.21--pyhdfd78af_0"
+    
+    publishDir "${params.outdir}/multiqc", mode: 'copy'
+
+    input:
+    path '*'
+    val multiqc_title
+
+    output:
+    path "*multiqc_report.html", emit: report
+    path "*_data"              , emit: data
+    path "*_plots"             , optional:true, emit: plots
+    path "versions.yml"        , emit: versions
+
+    script:
+    def args = task.ext.args ?: ''
+    def custom_config = params.multiqc_config ? "--config $params.multiqc_config" : ''
+    def extra_config = params.multiqc_methods_description ? "--cl-config 'custom_plot_config: {mqc_methods_description: \"${params.multiqc_methods_description}\"}'" : ''
+    def logo = params.multiqc_logo ? "--cl-config 'custom_logo: \"${params.multiqc_logo}\"'" : ''
+    """
+    multiqc \\
+        --force \\
+        $args \\
+        $custom_config \\
+        $extra_config \\
+        $logo \\
+        --title "$multiqc_title" \\
+        .
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        multiqc: \$( multiqc --version | sed -e "s/multiqc, version //g" )
+    END_VERSIONS
+    """
+
+    stub:
+    """
+    touch ${multiqc_title}_multiqc_report.html
+    mkdir ${multiqc_title}_data
+    mkdir ${multiqc_title}_plots
+
+    cat <<-END_VERSIONS > versions.yml
+    "${task.process}":
+        multiqc: \$( multiqc --version | sed -e "s/multiqc, version //g" )
+    END_VERSIONS
+    """
+}
+
 // Parameters
 params.input = 'samplesheet.csv'
 params.fasta = null
 params.gtf = null
-params.star_index = null
+params.hisat2_index = null
 params.outdir = 'results'
+params.multiqc_config = null
+params.multiqc_title = null
+params.multiqc_logo = null
+params.multiqc_methods_description = null
 
 // Help message
 def helpMessage() {
@@ -223,18 +289,21 @@ def helpMessage() {
       --gtf           Path to GTF annotation file
 
     Genome input (choose one):
-      --fasta         Path to genome FASTA file (will build STAR index)
-      --star_index    Path to pre-built STAR genome index directory
+      --fasta         Path to genome FASTA file (will build HISAT2 index)
+      --hisat2_index  Path to pre-built HISAT2 genome index directory
 
     Optional arguments:
       --outdir        Output directory (default: results)
+      --multiqc_title Custom title for MultiQC report
+      --multiqc_config Path to MultiQC config file
+      --multiqc_logo  Path to logo for MultiQC report
 
     Examples:
       # Build index from FASTA
       nextflow run main.nf --input samplesheet.csv --fasta genome.fa --gtf annotation.gtf
 
       # Use pre-built index
-      nextflow run main.nf --input samplesheet.csv --star_index /path/to/index --gtf annotation.gtf
+      nextflow run main.nf --input samplesheet.csv --hisat2_index /path/to/index --gtf annotation.gtf
     """.stripIndent()
 }
 
@@ -249,12 +318,12 @@ if (!params.gtf) {
     error "Please provide a GTF file with --gtf"
 }
 
-if (!params.fasta && !params.star_index) {
-    error "Please provide either a genome FASTA file (--fasta) or a pre-built STAR index (--star_index)"
+if (!params.fasta && !params.hisat2_index) {
+    error "Please provide either a genome FASTA file (--fasta) or a pre-built HISAT2 index (--hisat2_index)"
 }
 
-if (params.fasta && params.star_index) {
-    error "Please provide either --fasta OR --star_index, not both"
+if (params.fasta && params.hisat2_index) {
+    error "Please provide either --fasta OR --hisat2_index, not both"
 }
 
 workflow {
@@ -267,32 +336,58 @@ workflow {
             [meta, file(row.fastq_1)]
         }
 
+    // Initialize versions channel
+    ch_versions = Channel.empty()
+
     // Run FastQC
     FASTQC(ch_input)
+    ch_versions = ch_versions.mix(FASTQC.out.versions.first())
 
-    // Handle STAR index - either build it or use existing
+    // Handle HISAT2 index - either build it or use existing
     if (params.fasta) {
-        // Build STAR index from FASTA
-        STAR_GENOMEGENERATE(
+        // Build HISAT2 index from FASTA
+        HISAT2_BUILD(
             file(params.fasta),
-            file(params.gtf)
+            file(params.gtf),
+            []
         )
-        ch_star_index = STAR_GENOMEGENERATE.out.index
+        ch_hisat2_index = HISAT2_BUILD.out.index
+        ch_versions = ch_versions.mix(HISAT2_BUILD.out.versions)
     } else {
         // Use pre-built index
-        ch_star_index = Channel.value(file(params.star_index))
+        ch_hisat2_index = Channel.value(file(params.hisat2_index))
     }
 
-    // Run STAR alignment
-    STAR_ALIGN(
+    // Run HISAT2 alignment
+    HISAT2_ALIGN(
         ch_input,
-        ch_star_index,
+        ch_hisat2_index,
         file(params.gtf)
     )
+    ch_versions = ch_versions.mix(HISAT2_ALIGN.out.versions.first())
 
     // Run featureCounts
     FEATURECOUNTS(
-        STAR_ALIGN.out.bam,
+        HISAT2_ALIGN.out.bam,
         file(params.gtf)
+    )
+    ch_versions = ch_versions.mix(FEATURECOUNTS.out.versions.first())
+
+    // Collect all outputs for MultiQC
+    ch_multiqc_files = Channel.empty()
+    ch_multiqc_files = ch_multiqc_files.mix(FASTQC.out.zip.collect{it[1]}.ifEmpty([]))
+    ch_multiqc_files = ch_multiqc_files.mix(FASTQC.out.html.collect{it[1]}.ifEmpty([]))
+    ch_multiqc_files = ch_multiqc_files.mix(HISAT2_ALIGN.out.log.collect{it[1]}.ifEmpty([]))
+    ch_multiqc_files = ch_multiqc_files.mix(FEATURECOUNTS.out.counts.collect{it[1]}.ifEmpty([]))
+    ch_multiqc_files = ch_multiqc_files.mix(FEATURECOUNTS.out.summary.collect{it[1]}.ifEmpty([]))
+    ch_multiqc_files = ch_multiqc_files.mix(ch_versions.collect().ifEmpty([]))
+
+    // Set MultiQC title
+    multiqc_title = params.multiqc_title ?: 'RNA-seq Analysis Report'
+
+    // Run MultiQC
+    MULTIQC(
+        ch_multiqc_files.collect(),
+        multiqc_title
     )
 }
