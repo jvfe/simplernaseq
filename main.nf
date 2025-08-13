@@ -47,8 +47,8 @@ process HISAT2_ALIGN {
     tag "$meta.id"
     label 'process_high'
     
-    conda "bioconda::hisat2=2.2.1 bioconda::samtools=1.19.2"
-    container "quay.io/biocontainers/mulled-v2-a97e90b3b802d1da3d6958e0867610c718cb5eb1:2880dd9d8ad0a7b221d4ebc6e532a6ac915b6e90-0"
+    conda "bioconda::hisat2=2.2.1 bioconda::samtools=1.16.1"
+    container "quay.io/biocontainers/mulled-v2-a97e90b3b802d1da3d6958e0867610c718cb5eb1:2cdf6bf1e92acbeb9b2834b1c58754167173a410-0"
     
     publishDir "${params.outdir}/hisat2", mode: 'copy'
 
@@ -110,8 +110,8 @@ process HISAT2_BUILD {
     tag "hisat2_build"
     label 'process_high'
     
-    conda "bioconda::hisat2=2.2.1 bioconda::samtools=1.19.2"
-    container "quay.io/biocontainers/mulled-v2-a97e90b3b802d1da3d6958e0867610c718cb5eb1:2880dd9d8ad0a7b221d4ebc6e532a6ac915b6e90-0"
+    conda "bioconda::hisat2=2.2.1 bioconda::samtools=1.16.1"
+    container "quay.io/biocontainers/mulled-v2-a97e90b3b802d1da3d6958e0867610c718cb5eb1:2cdf6bf1e92acbeb9b2834b1c58754167173a410-0"
     
     publishDir "${params.outdir}/hisat2_index", mode: 'copy'
 
