@@ -573,7 +573,7 @@ workflow {
             ch_gtf_final,
             []
         )
-        ch_hisat2_index = HISAT2_BUILD.out.index
+        ch_hisat2_index = HISAT2_BUILD.out.index.first()
         ch_hisat2_build_versions = HISAT2_BUILD.out.versions
     } else {
         // Use pre-built index
@@ -586,13 +586,13 @@ workflow {
     HISAT2_ALIGN(
         ch_input,
         ch_hisat2_index,
-        ch_gtf_final
+        ch_gtf_final.first()
     )
 
     // Run featureCounts
     FEATURECOUNTS(
         HISAT2_ALIGN.out.bam,
-        ch_gtf_final
+        ch_gtf_final.first()
     )
 
     // Collect versions from all processes
