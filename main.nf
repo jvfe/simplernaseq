@@ -23,13 +23,8 @@ process GUNZIP {
     """
     # Not calling gunzip itself because it can be very slow
     # for large files. Using bash and zcat instead.
-    if [ "\$(file --brief --mime-type $archive)" == "application/gzip" ]; then
-        zcat $args $archive > $gunzip
-    else
-        # If not gzipped, just create a symlink
-        ln -s $archive $gunzip
-    fi
-
+    zcat $args $archive > $gunzip
+    
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
         gunzip: \$(echo \$(gunzip --version 2>&1) | sed 's/^.*(gzip) //; s/ Copyright.*\$//')
@@ -67,12 +62,7 @@ process GUNZIP_GTF {
     """
     # Not calling gunzip itself because it can be very slow
     # for large files. Using bash and zcat instead.
-    if [ "\$(file --brief --mime-type $archive)" == "application/gzip" ]; then
-        zcat $args $archive > $gunzip
-    else
-        # If not gzipped, just create a symlink
-        ln -s $archive $gunzip
-    fi
+    zcat $args $archive > $gunzip
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
